@@ -492,7 +492,7 @@ calculateVoteButton.addEventListener('click', function() {
     } else if (finalNay > finalAye) {
         resultText = "否決 (反対多数)";
     } else {
-        resultText = "同数";
+        resultText = "同数 (否決)";
     }
 
     voteCalculationFormulaDiv.innerText = `計算式:\n${formulaText}`;
