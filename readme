@@ -1,4 +1,0 @@
-chairperson-system/
-├── index.html      // HTMLファイル (画面の骨組み)
-├── style.css       // CSSファイル (見た目の装飾)
-└── script.js       // JavaScriptファイル (動きや処理)
