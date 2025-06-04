@@ -36,7 +36,7 @@
         <div id="timerMode" class="mode-content">
             <h2>タイマーモード</h2>
             <div id="timerPresets">
-                <!-- プリセットボタンはJSで生成 -->
+                <!-- プリセットボタンはJSで生成。回数表示用のspanもJSで追加する -->
             </div>
             <div id="timerDisplay">00:00</div>
             <div id="endTimeDisplay">終了時刻: --:--</div>
@@ -44,7 +44,6 @@
             <button id="resetTimerButton">リセット</button>
 
             <!-- 裏設定: 時刻指定タイマー (最初はコメントアウト) -->
-            <!--
             <fieldset>
                 <legend>時刻指定タイマー (裏設定)</legend>
                 <label for="targetTimeInput">目標時刻 (HH:MM):</label>
@@ -52,7 +51,6 @@
                 <button id="startTargetTimeTimerButton">指定時刻で開始</button>
                 <div id="targetTimeRemainingDisplay"></div>
             </fieldset>
-            -->
         </div>
 
         <!-- 票決モードのコンテンツエリア -->
