@@ -19,6 +19,39 @@ const modeSwitcher = document.getElementById('modeSwitcher');
 const timerModeDiv = document.getElementById('timerMode');
 const votingModeDiv = document.getElementById('votingMode');
 
+// --- 初期表示モードの設定 ---
+document.addEventListener('DOMContentLoaded', () => {
+    // modeSwitcher の初期値に基づいて表示を切り替える
+    // HTMLのセレクトボックスで timer が最初に選択されていれば、
+    // 以下のif文は timerModeDiv を表示し、votingModeDiv を非表示にする。
+    // HTML側で style="display:none;" を votingModeDiv に設定済みなので、
+    // この処理は冗長かもしれないが、JS側でも明示的に制御する例として。
+
+    const initialMode = modeSwitcher.value; // <select>の現在の値を取得
+    if (initialMode === 'timer') {
+        timerModeDiv.style.display = 'block';
+        votingModeDiv.style.display = 'none';
+    } else if (initialMode === 'voting') {
+        timerModeDiv.style.display = 'none';
+        votingModeDiv.style.display = 'block';
+        updateProxyVoteFieldVisibility(); // 票決モード初期表示時にも必要
+    }
+    // 必要であれば、他の初期化処理もここに追加
+});
+
+
+// --- モード切替 (既存のコード) ---
+modeSwitcher.addEventListener('change', function() {
+    if (this.value === 'timer') {
+        timerModeDiv.style.display = 'block';
+        votingModeDiv.style.display = 'none';
+    } else if (this.value === 'voting') {
+        timerModeDiv.style.display = 'none';
+        votingModeDiv.style.display = 'block';
+        updateProxyVoteFieldVisibility(); // 票決モードに切り替えたら、議長委任票の表示を更新
+    }
+});
+
 // --- 現在時刻表示 ---
 function updateCurrentTime() {
     const now = new Date();
@@ -59,35 +92,42 @@ const targetTimeRemainingDisplay = document.getElementById('targetTimeRemainingD
 let timerInterval = null; // タイマーのsetIntervalのIDを保持
 let remainingSeconds = 0; // 残り秒数
 let selectedPresetDuration = 0; // 選択されたプリセットの時間（秒）
-let currentPresetDocId = null; // 現在選択されているプリセットのFirestoreドキュメントID
-let presetClickCounts = {}; // ローカルでプリセットごとのクリック数を保持するオブジェクト（ID: count）
+const totalPresetClicksDisplay = document.getElementById('totalPresetClicksDisplay'); // 合計回数表示用
+
+let currentPresetDocId = null;
+let presetClickCounts = {}; // { presetId1: count1, presetId2: count2, ... }
+
 
 // --- プリセット時間のFirestoreからの読み込みとボタン生成 (修正) ---
 async function loadTimerPresets() {
     try {
         const snapshot = await db.collection('timerPresets').orderBy('durationSeconds').get();
         timerPresetsDiv.innerHTML = ''; // 既存のボタンをクリア
+        let totalClicks = 0; // 全プリセットの合計クリック数を計算するための変数
+
         snapshot.forEach(doc => {
             const preset = doc.data();
-            const presetId = doc.id; // ドキュメントIDを取得
-            presetClickCounts[presetId] = preset.clickCount || 0; // ローカルにクリック数を保存
+            const presetId = doc.id;
+            const currentCount = preset.clickCount || 0;
+            presetClickCounts[presetId] = currentCount;
+            totalClicks += currentCount; // 合計に加算
 
-            const buttonContainer = document.createElement('div'); // ボタンと回数表示をまとめるコンテナ
-            buttonContainer.style.margin = "5px 0";
+            const wrapper = document.createElement('div'); // ボタンと回数をまとめるラッパー
+            wrapper.classList.add('preset-button-wrapper');
 
             const button = document.createElement('button');
             button.textContent = preset.name;
             button.dataset.seconds = preset.durationSeconds;
-            button.dataset.id = presetId; // ドキュメントIDをデータ属性に格納
+            button.dataset.id = presetId;
 
-            const countDisplay = document.createElement('span');
+            const countDisplay = document.createElement('div'); // divに変更してボタンの直下に
             countDisplay.id = `count-${presetId}`;
-            countDisplay.textContent = ` (使用回数: ${presetClickCounts[presetId]})`;
-            countDisplay.style.marginLeft = "10px";
+            countDisplay.classList.add('preset-click-count');
+            countDisplay.textContent = `${currentCount}`;
 
             button.addEventListener('click', async function() {
                 selectedPresetDuration = parseInt(this.dataset.seconds);
-                currentPresetDocId = this.dataset.id; // 選択されたプリセットのIDを保持
+                currentPresetDocId = this.dataset.id;
 
                 remainingSeconds = selectedPresetDuration;
                 updateTimerDisplay(remainingSeconds);
@@ -95,30 +135,163 @@ async function loadTimerPresets() {
                 if (timerInterval) clearInterval(timerInterval);
                 startTimerButton.disabled = false;
 
-                // クリック回数をインクリメントしてFirestoreを更新
                 try {
-                    const newCount = (presetClickCounts[currentPresetDocId] || 0) + 1;
-                    await db.collection('timerPresets').doc(currentPresetDocId).update({
-                        clickCount: firebase.firestore.FieldValue.increment(1) // Firestoreのincrement機能を利用
+                    // Firestoreのカウントをインクリメント (アトミック操作)
+                    const presetRef = db.collection('timerPresets').doc(currentPresetDocId);
+                    await presetRef.update({
+                        clickCount: firebase.firestore.FieldValue.increment(1)
                     });
-                    presetClickCounts[currentPresetDocId] = newCount; // ローカルのカウントも更新
-                    document.getElementById(`count-${currentPresetDocId}`).textContent = ` (使用回数: ${newCount})`;
-                    console.log(`Preset ${preset.name} count incremented to ${newCount}`);
+
+                    // ローカルのカウントと表示を更新
+                    presetClickCounts[currentPresetDocId]++;
+                    document.getElementById(`count-${currentPresetDocId}`).textContent = `${presetClickCounts[currentPresetDocId]}`;
+
+                    // 合計クリック数を更新
+                    updateTotalClicksDisplay();
+
+                    console.log(`Preset ${preset.name} count incremented`);
                 } catch (error) {
                     console.error("Error updating preset click count: ", error);
                 }
             });
 
-            buttonContainer.appendChild(button);
-            buttonContainer.appendChild(countDisplay);
-            timerPresetsDiv.appendChild(buttonContainer);
+            wrapper.appendChild(button);
+            wrapper.appendChild(countDisplay);
+            timerPresetsDiv.appendChild(wrapper);
         });
+
+        // 初回ロード時に合計クリック数を表示
+        updateTotalClicksDisplay();
+
     } catch (error) {
         console.error("Error loading timer presets: ", error);
         timerPresetsDiv.textContent = "プリセットの読み込みに失敗しました。";
+        totalPresetClicksDisplay.textContent = "エラー";
     }
 }
 
+// --- タイマーリセット処理 (全体リセットに修正) ---
+resetTimerButton.addEventListener('click', async function() {
+    clearInterval(timerInterval);
+    timerInterval = null;
+    remainingSeconds = 0;
+    updateTimerDisplay(remainingSeconds); // タイマー表示を 00:00 に
+    endTimeDisplay.textContent = "終了時刻: --:--";
+    startTimerButton.disabled = true; // スタートボタンは選択されるまで無効
+
+    // ★★★ 全てのプリセットのクリック回数を0にリセット ★★★
+    try {
+        const presetsQuerySnapshot = await db.collection('timerPresets').get();
+        const batch = db.batch(); // バッチ処理を開始
+
+        presetsQuerySnapshot.forEach(doc => {
+            const presetRef = db.collection('timerPresets').doc(doc.id);
+            batch.update(presetRef, { clickCount: 0 }); // バッチに更新操作を追加
+
+            // ローカルのカウントと表示もリセット
+            presetClickCounts[doc.id] = 0;
+            const countDisplayElement = document.getElementById(`count-${doc.id}`);
+            if (countDisplayElement) {
+                countDisplayElement.textContent = `0回`;
+            }
+        });
+
+        await batch.commit(); // バッチ処理を実行してFirestoreを更新
+        console.log("All preset counts have been reset to 0 in Firestore.");
+
+        // 合計クリック数を更新
+        updateTotalClicksDisplay();
+
+    } catch (error) {
+        console.error("Error resetting all preset click counts: ", error);
+        // エラーが発生した場合でも、ローカルの表示だけでもリセットを試みる
+        for (const presetId in presetClickCounts) {
+            presetClickCounts[presetId] = 0;
+            const countDisplayElement = document.getElementById(`count-${presetId}`);
+            if (countDisplayElement) {
+                countDisplayElement.textContent = `0回`;
+            }
+        }
+        updateTotalClicksDisplay(); // ローカルだけでも合計を更新
+        alert("一部またはすべてのプリセット回数のリセットに失敗しました。画面表示はリセットされます。");
+    }
+
+    selectedPresetDuration = 0; // 選択されていたプリセットの時間をリセット
+    currentPresetDocId = null; // 選択されているプリセットIDもリセット
+});
+
+// --- プリセット時間のFirestoreからの読み込みとボタン生成 (ほぼ変更なし、確認のため記載) ---
+async function loadTimerPresets() {
+    try {
+        const snapshot = await db.collection('timerPresets').orderBy('durationSeconds').get();
+        timerPresetsDiv.innerHTML = '';
+        let totalClicks = 0;
+
+        snapshot.forEach(doc => {
+            const preset = doc.data();
+            const presetId = doc.id;
+            const currentCount = preset.clickCount || 0;
+            presetClickCounts[presetId] = currentCount; // ★重要: presetClickCounts をここで初期化
+            totalClicks += currentCount;
+
+            const wrapper = document.createElement('div');
+            wrapper.classList.add('preset-button-wrapper');
+
+            const button = document.createElement('button');
+            button.textContent = preset.name;
+            button.dataset.seconds = preset.durationSeconds;
+            button.dataset.id = presetId;
+
+            const countDisplay = document.createElement('div');
+            countDisplay.id = `count-${presetId}`;
+            countDisplay.classList.add('preset-click-count');
+            countDisplay.textContent = `${currentCount}回`;
+
+            button.addEventListener('click', async function() {
+                selectedPresetDuration = parseInt(this.dataset.seconds);
+                currentPresetDocId = this.dataset.id;
+
+                remainingSeconds = selectedPresetDuration;
+                updateTimerDisplay(remainingSeconds);
+                calculateAndDisplayEndTime(remainingSeconds);
+                if (timerInterval) clearInterval(timerInterval);
+                startTimerButton.disabled = false;
+
+                try {
+                    const presetRef = db.collection('timerPresets').doc(currentPresetDocId);
+                    await presetRef.update({
+                        clickCount: firebase.firestore.FieldValue.increment(1)
+                    });
+
+                    presetClickCounts[currentPresetDocId]++;
+                    document.getElementById(`count-${currentPresetDocId}`).textContent = `${presetClickCounts[currentPresetDocId]}回`;
+                    updateTotalClicksDisplay();
+                    console.log(`Preset ${preset.name} count incremented`);
+                } catch (error) {
+                    console.error("Error updating preset click count: ", error);
+                }
+            });
+
+            wrapper.appendChild(button);
+            wrapper.appendChild(countDisplay);
+            timerPresetsDiv.appendChild(wrapper);
+        });
+        updateTotalClicksDisplay();
+    } catch (error) {
+        console.error("Error loading timer presets: ", error);
+        timerPresetsDiv.textContent = "プリセットの読み込みに失敗しました。";
+        totalPresetClicksDisplay.textContent = "合計回数:エラー";
+    }
+}
+
+// --- 合計クリック数表示を更新する関数 (変更なし) ---
+function updateTotalClicksDisplay() {
+    let sum = 0;
+    for (const id in presetClickCounts) {
+        sum += presetClickCounts[id];
+    }
+    totalPresetClicksDisplay.textContent = `合計回数:${sum}回`;
+}
 loadTimerPresets(); // ページ読み込み時にプリセットを読み込む
 
 // --- タイマー表示更新 ---
@@ -171,47 +344,6 @@ startTimerButton.addEventListener('click', function() {
 // 初期ロード時にスタートボタンを無効化しておく
 startTimerButton.disabled = true;
 
-
-
-// --- タイマーリセット処理 (修正) ---
-resetTimerButton.addEventListener('click', async function() {
-    clearInterval(timerInterval);
-    timerInterval = null;
-    remainingSeconds = 0; // 残り秒数を0に
-    updateTimerDisplay(remainingSeconds); // 表示を 00:00 に更新
-    endTimeDisplay.textContent = "終了時刻: --:--";
-    startTimerButton.disabled = true; // スタートボタンは選択されるまで無効
-
-    // 選択されていたプリセットがあれば、そのクリック回数をFirestore上で0に戻す
-    if (currentPresetDocId) {
-        try {
-            await db.collection('timerPresets').doc(currentPresetDocId).update({
-                clickCount: 0
-            });
-            presetClickCounts[currentPresetDocId] = 0; // ローカルのカウントも0に
-            const countDisplayElement = document.getElementById(`count-${currentPresetDocId}`);
-            if(countDisplayElement) { // 要素が存在するか確認
-                 countDisplayElement.textContent = ` (使用回数: 0)`;
-            }
-            console.log(`Preset count for ${currentPresetDocId} reset to 0 in Firestore.`);
-        } catch (error) {
-            console.error("Error resetting preset click count: ", error);
-            // エラー発生時でもローカルのUIリセットは試みる
-            if (presetClickCounts[currentPresetDocId] !== undefined) {
-                presetClickCounts[currentPresetDocId] = 0;
-                const countDisplayElement = document.getElementById(`count-${currentPresetDocId}`);
-                if(countDisplayElement) {
-                    countDisplayElement.textContent = ` (使用回数: 0)`;
-                }
-            }
-        }
-    }
-
-    selectedPresetDuration = 0; // 選択されていたプリセットの時間をリセット
-    currentPresetDocId = null; // 選択されているプリセットIDもリセット
-    // (オプション) もし全プリセットのローカルカウントをリロードしたければ loadTimerPresets() を再度呼ぶ
-    // loadTimerPresets(); // UI上の全プリセットのカウント表示を最新にする場合
-});
 
 // --- (裏設定) 時刻指定タイマー ---
 // コメントアウトを外して使用する場合は、HTML側のコメントアウトも外してください。

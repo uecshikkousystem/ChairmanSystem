@@ -32,11 +32,16 @@
     </header>
 
     <main>
-        <!-- タイマーモードのコンテンツエリア -->
+        <!-- index.html のタイマーモードのコンテンツエリア -->
         <div id="timerMode" class="mode-content">
             <h2>タイマーモード</h2>
-            <div id="timerPresets">
-                <!-- プリセットボタンはJSで生成。回数表示用のspanもJSで追加する -->
+            <div id="timerControlsContainer"> <!-- プリセットと合計回数を横並びにするためのコンテナ -->
+                <div id="timerPresets">
+                    <!-- プリセットボタンと個別回数はJSで生成 -->
+                </div>
+                <div id="totalPresetClicksDisplay" style="margin-left: flex; font-weight: bold;">
+                    
+                </div>
             </div>
             <div id="timerDisplay">00:00</div>
             <div id="endTimeDisplay">終了時刻: --:--</div>
@@ -45,7 +50,7 @@
 
             <!-- 裏設定: 時刻指定タイマー (最初はコメントアウト) -->
             <fieldset>
-                <legend>時刻指定タイマー (裏設定)</legend>
+                <legend>時刻指定タイマー</legend>
                 <label for="targetTimeInput">目標時刻 (HH:MM):</label>
                 <input type="time" id="targetTimeInput">
                 <button id="startTargetTimeTimerButton">指定時刻で開始</button>
@@ -54,7 +59,7 @@
         </div>
 
         <!-- 票決モードのコンテンツエリア -->
-        <div id="votingMode" class="mode-content">
+        <div id="votingMode" class="mode-content" style="display:none;">
             <h2>票決モード</h2>
             <div>
                 多数決タイプ:
