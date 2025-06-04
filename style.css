@@ -47,7 +47,7 @@ header h1 {
     font-size: 1.2em;
     margin-bottom: 20px;
 }
-#timerPresets button, #timerMode button, #votingMode button {
+#timerMode button, #votingMode button {
     padding: 10px 15px;
     margin: 5px;
     background-color: #007bff;
@@ -56,7 +56,7 @@ header h1 {
     border-radius: 3px;
     cursor: pointer;
 }
-#timerPresets button:hover, #timerMode button:hover, #votingMode button:hover {
+#timerMode button:hover, #votingMode button:hover {
     background-color: #0056b3;
 }
 .vote-inputs {
@@ -83,4 +83,55 @@ header h1 {
     padding: 10px;
     background-color: #e9ecef;
     border-radius: 3px;
+}
+
+/* style.css に追記 */
+.timer-presets-container {
+    display: flex; /* ボタンと合計回数を横並びにするため */
+    flex-wrap: wrap; /* ボタンが多い場合に折り返す */
+    align-items: flex-start; /* 上端揃え */
+    position: relative; /* 合計回数表示の位置調整のため */
+}
+
+#timerControlsContainer {
+    display: flex; /* 横並びにする */
+    align-items: flex-start; /* 上端揃え */
+    margin-bottom: 15px;
+}
+
+#timerPresets {
+    display: flex; /* プリセットボタン自体も横並びにするか、flex-direction: column; で縦並びにするかはお好みで */
+    flex-wrap: wrap; /* ボタンが多い場合に折り返す */
+    gap: 5px; /* ボタン間の隙間 */
+}
+
+.preset-button-wrapper { /* 各プリセットボタンと回数をまとめるラッパー */
+    display: flex;
+    flex-direction: column; /* ボタンの下に回数を表示 */
+    align-items: center; /* 中央揃え */
+    margin-right: 0px; /* 各プリセット間のマージン */
+    border: 1px solid #eee; /* 見た目の区切り（任意） */
+    border-radius: 4px;
+}
+
+.preset-button-wrapper button {
+    margin-bottom: 5px; /* ボタンと回数の間のスペース */
+    background-color: #0056b3;
+}
+
+.preset-click-count {
+    font-size: 0.9em;
+    color: #555;
+    margin-top: 5px;
+}
+
+#totalPresetClicksDisplay {
+    /* position: absolute;
+    top: 0;
+    right: 0; */ /* ← flexboxを使うのでこれは不要になるかも */
+    margin-left: auto; /* これで右端に寄る */
+    padding: flex;
+    font-weight: bold;
+    align-self: center; /* 他の要素と縦方向中央揃え */
+    padding-top: 25px; /* ボタンとの高さを少し合わせるなど */
 }
