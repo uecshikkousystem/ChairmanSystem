@@ -1,7 +1,7 @@
 // script.js の先頭
 // TODO: Firebaseプロジェクトからコピーした設定情報を貼り付けてください
 const firebaseConfig = {
-    apiKey: "AIzaSyCZOsfyAH0xiF7b9jjpXA4C1Zt1DlIMoAU",
+    apiKey: "AIzaSyCZOsfyAH0xiF7b9jjpXA4C1Zt1DlIMoAU", // セキュリティのため、実際のキーは公開しないでください
     authDomain: "shikkouchairmansystem.firebaseapp.com",
     projectId: "shikkouchairmansystem",
     storageBucket: "shikkouchairmansystem.firebasestorage.app",
@@ -13,34 +13,65 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore(); // Firestoreインスタンスを取得
 
-// DOM要素の取得 (よく使うものを最初にまとめて取得しておくと便利)
+// DOM要素の取得
 const currentTimeDisplay = document.getElementById('currentTimeDisplay');
 const modeSwitcher = document.getElementById('modeSwitcher');
 const timerModeDiv = document.getElementById('timerMode');
 const votingModeDiv = document.getElementById('votingMode');
 
+const timerPresetsDiv = document.getElementById('timerPresets');
+const timerDisplay = document.getElementById('timerDisplay');
+const endTimeDisplay = document.getElementById('endTimeDisplay');
+const startTimerButton = document.getElementById('startTimerButton');
+const resetTimerButton = document.getElementById('resetTimerButton');
+const totalPresetClicksDisplay = document.getElementById('totalPresetClicksDisplay');
+
+// 裏設定用 (HTMLに要素がない場合はコメントアウト、またはダミー要素をHTMLに追加)
+// const targetTimeInput = document.getElementById('targetTimeInput');
+// const startTargetTimeTimerButton = document.getElementById('startTargetTimeTimerButton');
+// const targetTimeRemainingDisplay = document.getElementById('targetTimeRemainingDisplay');
+
+const majorityTypeSelect = document.getElementById('majorityType');
+const aye1Input = document.getElementById('aye1');
+const aye2Input = document.getElementById('aye2');
+const aye3Input = document.getElementById('aye3');
+const nay1Input = document.getElementById('nay1');
+const nay2Input = document.getElementById('nay2');
+const nay3Input = document.getElementById('nay3');
+const proxyVoteInput = document.getElementById('proxyVote');
+const proxyVoteField = document.getElementById('proxyVoteField');
+const calculateVoteButton = document.getElementById('calculateVoteButton');
+const voteCalculationFormulaDiv = document.getElementById('voteCalculationFormula');
+const voteResultDiv = document.getElementById('voteResult');
+const saveVoteResultButton = document.getElementById('saveVoteResultButton');
+
+// タイマー関連のグローバル変数
+let timerInterval = null;
+let remainingSeconds = 0;
+let selectedPresetDuration = 0;
+let isPresetSelectedAndLocked = false;
+let currentPresetDocId = null;
+let presetClickCounts = {}; // { presetId1: count1, presetId2: count2, ... }
+
+// 票決関連のグローバル変数
+let lastVoteResultData = null;
+
 // --- 初期表示モードの設定 ---
 document.addEventListener('DOMContentLoaded', () => {
-    // modeSwitcher の初期値に基づいて表示を切り替える
-    // HTMLのセレクトボックスで timer が最初に選択されていれば、
-    // 以下のif文は timerModeDiv を表示し、votingModeDiv を非表示にする。
-    // HTML側で style="display:none;" を votingModeDiv に設定済みなので、
-    // この処理は冗長かもしれないが、JS側でも明示的に制御する例として。
-
-    const initialMode = modeSwitcher.value; // <select>の現在の値を取得
+    const initialMode = modeSwitcher.value;
     if (initialMode === 'timer') {
         timerModeDiv.style.display = 'block';
         votingModeDiv.style.display = 'none';
     } else if (initialMode === 'voting') {
         timerModeDiv.style.display = 'none';
         votingModeDiv.style.display = 'block';
-        updateProxyVoteFieldVisibility(); // 票決モード初期表示時にも必要
+        updateProxyVoteFieldVisibility();
     }
-    // 必要であれば、他の初期化処理もここに追加
+    loadTimerPresets(); // タイマープリセットの読み込み
+    startTimerButton.disabled = true; // 初期状態はスタートボタン無効
 });
 
-
-// --- モード切替 (既存のコード) ---
+// --- モード切替 ---
 modeSwitcher.addEventListener('change', function() {
     if (this.value === 'timer') {
         timerModeDiv.style.display = 'block';
@@ -48,7 +79,7 @@ modeSwitcher.addEventListener('change', function() {
     } else if (this.value === 'voting') {
         timerModeDiv.style.display = 'none';
         votingModeDiv.style.display = 'block';
-        updateProxyVoteFieldVisibility(); // 票決モードに切り替えたら、議長委任票の表示を更新
+        updateProxyVoteFieldVisibility();
     }
 });
 
@@ -60,178 +91,113 @@ function updateCurrentTime() {
     const seconds = String(now.getSeconds()).padStart(2, '0');
     currentTimeDisplay.textContent = `${hours}:${minutes}:${seconds}`;
 }
-setInterval(updateCurrentTime, 1000); // 1秒ごとに時刻を更新
-updateCurrentTime(); // 最初に一度呼び出して表示
+setInterval(updateCurrentTime, 1000);
+updateCurrentTime();
 
-// --- モード切替 ---
-modeSwitcher.addEventListener('change', function() {
-    if (this.value === 'timer') {
-        timerModeDiv.style.display = 'block';
-        votingModeDiv.style.display = 'none';
-    } else if (this.value === 'voting') {
-        timerModeDiv.style.display = 'none';
-        votingModeDiv.style.display = 'block';
-        // 票決モードに切り替えたら、議長委任票の表示を多数決タイプに応じて更新
-        updateProxyVoteFieldVisibility();
+// --- タイマー機能 ---
+
+// ヘルパー関数: プリセットボタンの有効/無効を切り替える
+function setPresetButtonsState(shouldBeEnabled, clickedButtonId = null, forceDisableAll = false) {
+    const presetButtons = timerPresetsDiv.querySelectorAll('.preset-button-wrapper button');
+    presetButtons.forEach(button => {
+        if (forceDisableAll) { // ★ 追加: 強制的に全ボタン無効化
+            button.disabled = true;
+            return;
+        }
+        if (clickedButtonId && button.dataset.id === clickedButtonId && !shouldBeEnabled) {
+            // 選択中のボタンで、かつ他を無効化する指示の場合 (つまり選択ロック時)
+            button.disabled = false; // 選択中のボタンはキャンセル用に有効のまま
+        } else {
+            button.disabled = !shouldBeEnabled;
+        }
+    });
+}
+
+// プリセット選択/キャンセル処理
+async function handlePresetSelection(buttonElement) {
+    const presetId = buttonElement.dataset.id;
+    const durationSeconds = parseInt(buttonElement.dataset.seconds);
+
+    if (isPresetSelectedAndLocked) {
+        if (presetId === currentPresetDocId) { // 同じボタンが再度押された (キャンセル処理)
+            console.log("Cancelling preset:", presetId);
+            try {
+                // (キャンセル処理のFirestore更新とUI更新は変更なし)
+                const presetRef = db.collection('timerPresets').doc(currentPresetDocId);
+                await presetRef.update({
+                    clickCount: firebase.firestore.FieldValue.increment(-1)
+                });
+                presetClickCounts[currentPresetDocId]--;
+                document.getElementById(`count-${currentPresetDocId}`).textContent = `${presetClickCounts[currentPresetDocId]}回`;
+                updateTotalClicksDisplay();
+
+                clearInterval(timerInterval);
+                timerInterval = null;
+                remainingSeconds = 0;
+                updateTimerDisplay(remainingSeconds);
+                endTimeDisplay.textContent = "終了時刻: --:--";
+
+                isPresetSelectedAndLocked = false;
+                currentPresetDocId = null;
+                selectedPresetDuration = 0;
+                setPresetButtonsState(true); // 全ボタン有効化
+                startTimerButton.disabled = true;
+                console.log("Preset cancelled. All buttons enabled.");
+            } catch (error) {
+                console.error("Error cancelling preset count:", error);
+                alert("プリセットのキャンセル処理に失敗しました。");
+            }
+        } else {
+            console.warn("Another preset is already selected. Click the selected one to cancel or reset.");
+        }
+    } else { // 新規にプリセット選択
+        console.log("Selecting preset:", presetId);
+        // (新規選択時の処理は基本的に変更なし)
+        currentPresetDocId = presetId;
+        selectedPresetDuration = durationSeconds;
+        isPresetSelectedAndLocked = true;
+
+        try {
+            const presetRef = db.collection('timerPresets').doc(currentPresetDocId);
+            await presetRef.update({
+                clickCount: firebase.firestore.FieldValue.increment(1)
+            });
+            presetClickCounts[currentPresetDocId]++;
+            document.getElementById(`count-${currentPresetDocId}`).textContent = `${presetClickCounts[currentPresetDocId]}回`;
+            updateTotalClicksDisplay();
+
+            remainingSeconds = selectedPresetDuration;
+            updateTimerDisplay(remainingSeconds);
+            calculateAndDisplayEndTime(remainingSeconds);
+            if (timerInterval) clearInterval(timerInterval);
+
+            setPresetButtonsState(false, currentPresetDocId); // 他を無効化、選択中のものは有効
+            startTimerButton.disabled = false;
+            console.log("Preset selected. Other buttons disabled.");
+        } catch (error) {
+            console.error("Error selecting preset:", error);
+            alert("プリセットの選択処理に失敗しました。");
+            isPresetSelectedAndLocked = false;
+            currentPresetDocId = null;
+            selectedPresetDuration = 0;
+            setPresetButtonsState(true); // エラー時は全ボタン有効に戻す
+            startTimerButton.disabled = true;
+        }
     }
-});
+}
 
-// --- タイマーモード関連のDOM要素 ---
-const timerPresetsDiv = document.getElementById('timerPresets');
-const timerDisplay = document.getElementById('timerDisplay');
-const endTimeDisplay = document.getElementById('endTimeDisplay');
-const startTimerButton = document.getElementById('startTimerButton');
-const resetTimerButton = document.getElementById('resetTimerButton');
-
-// (裏設定用)
-const targetTimeInput = document.getElementById('targetTimeInput');
-const startTargetTimeTimerButton = document.getElementById('startTargetTimeTimerButton');
-const targetTimeRemainingDisplay = document.getElementById('targetTimeRemainingDisplay');
-
-
-let timerInterval = null; // タイマーのsetIntervalのIDを保持
-let remainingSeconds = 0; // 残り秒数
-let selectedPresetDuration = 0; // 選択されたプリセットの時間（秒）
-const totalPresetClicksDisplay = document.getElementById('totalPresetClicksDisplay'); // 合計回数表示用
-
-let currentPresetDocId = null;
-let presetClickCounts = {}; // { presetId1: count1, presetId2: count2, ... }
-
-
-// --- プリセット時間のFirestoreからの読み込みとボタン生成 (修正) ---
 async function loadTimerPresets() {
     try {
         const snapshot = await db.collection('timerPresets').orderBy('durationSeconds').get();
-        timerPresetsDiv.innerHTML = ''; // 既存のボタンをクリア
-        let totalClicks = 0; // 全プリセットの合計クリック数を計算するための変数
+        timerPresetsDiv.innerHTML = '';
+        let totalClicks = 0;
+        presetClickCounts = {};
 
         snapshot.forEach(doc => {
             const preset = doc.data();
             const presetId = doc.id;
             const currentCount = preset.clickCount || 0;
             presetClickCounts[presetId] = currentCount;
-            totalClicks += currentCount; // 合計に加算
-
-            const wrapper = document.createElement('div'); // ボタンと回数をまとめるラッパー
-            wrapper.classList.add('preset-button-wrapper');
-
-            const button = document.createElement('button');
-            button.textContent = preset.name;
-            button.dataset.seconds = preset.durationSeconds;
-            button.dataset.id = presetId;
-
-            const countDisplay = document.createElement('div'); // divに変更してボタンの直下に
-            countDisplay.id = `count-${presetId}`;
-            countDisplay.classList.add('preset-click-count');
-            countDisplay.textContent = `${currentCount}`;
-
-            button.addEventListener('click', async function() {
-                selectedPresetDuration = parseInt(this.dataset.seconds);
-                currentPresetDocId = this.dataset.id;
-
-                remainingSeconds = selectedPresetDuration;
-                updateTimerDisplay(remainingSeconds);
-                calculateAndDisplayEndTime(remainingSeconds);
-                if (timerInterval) clearInterval(timerInterval);
-                startTimerButton.disabled = false;
-
-                try {
-                    // Firestoreのカウントをインクリメント (アトミック操作)
-                    const presetRef = db.collection('timerPresets').doc(currentPresetDocId);
-                    await presetRef.update({
-                        clickCount: firebase.firestore.FieldValue.increment(1)
-                    });
-
-                    // ローカルのカウントと表示を更新
-                    presetClickCounts[currentPresetDocId]++;
-                    document.getElementById(`count-${currentPresetDocId}`).textContent = `${presetClickCounts[currentPresetDocId]}`;
-
-                    // 合計クリック数を更新
-                    updateTotalClicksDisplay();
-
-                    console.log(`Preset ${preset.name} count incremented`);
-                } catch (error) {
-                    console.error("Error updating preset click count: ", error);
-                }
-            });
-
-            wrapper.appendChild(button);
-            wrapper.appendChild(countDisplay);
-            timerPresetsDiv.appendChild(wrapper);
-        });
-
-        // 初回ロード時に合計クリック数を表示
-        updateTotalClicksDisplay();
-
-    } catch (error) {
-        console.error("Error loading timer presets: ", error);
-        timerPresetsDiv.textContent = "プリセットの読み込みに失敗しました。";
-        totalPresetClicksDisplay.textContent = "エラー";
-    }
-}
-
-// --- タイマーリセット処理 (全体リセットに修正) ---
-resetTimerButton.addEventListener('click', async function() {
-    clearInterval(timerInterval);
-    timerInterval = null;
-    remainingSeconds = 0;
-    updateTimerDisplay(remainingSeconds); // タイマー表示を 00:00 に
-    endTimeDisplay.textContent = "終了時刻: --:--";
-    startTimerButton.disabled = true; // スタートボタンは選択されるまで無効
-
-    // ★★★ 全てのプリセットのクリック回数を0にリセット ★★★
-    try {
-        const presetsQuerySnapshot = await db.collection('timerPresets').get();
-        const batch = db.batch(); // バッチ処理を開始
-
-        presetsQuerySnapshot.forEach(doc => {
-            const presetRef = db.collection('timerPresets').doc(doc.id);
-            batch.update(presetRef, { clickCount: 0 }); // バッチに更新操作を追加
-
-            // ローカルのカウントと表示もリセット
-            presetClickCounts[doc.id] = 0;
-            const countDisplayElement = document.getElementById(`count-${doc.id}`);
-            if (countDisplayElement) {
-                countDisplayElement.textContent = `0回`;
-            }
-        });
-
-        await batch.commit(); // バッチ処理を実行してFirestoreを更新
-        console.log("All preset counts have been reset to 0 in Firestore.");
-
-        // 合計クリック数を更新
-        updateTotalClicksDisplay();
-
-    } catch (error) {
-        console.error("Error resetting all preset click counts: ", error);
-        // エラーが発生した場合でも、ローカルの表示だけでもリセットを試みる
-        for (const presetId in presetClickCounts) {
-            presetClickCounts[presetId] = 0;
-            const countDisplayElement = document.getElementById(`count-${presetId}`);
-            if (countDisplayElement) {
-                countDisplayElement.textContent = `0回`;
-            }
-        }
-        updateTotalClicksDisplay(); // ローカルだけでも合計を更新
-        alert("一部またはすべてのプリセット回数のリセットに失敗しました。画面表示はリセットされます。");
-    }
-
-    selectedPresetDuration = 0; // 選択されていたプリセットの時間をリセット
-    currentPresetDocId = null; // 選択されているプリセットIDもリセット
-});
-
-// --- プリセット時間のFirestoreからの読み込みとボタン生成 (ほぼ変更なし、確認のため記載) ---
-async function loadTimerPresets() {
-    try {
-        const snapshot = await db.collection('timerPresets').orderBy('durationSeconds').get();
-        timerPresetsDiv.innerHTML = '';
-        let totalClicks = 0;
-
-        snapshot.forEach(doc => {
-            const preset = doc.data();
-            const presetId = doc.id;
-            const currentCount = preset.clickCount || 0;
-            presetClickCounts[presetId] = currentCount; // ★重要: presetClickCounts をここで初期化
             totalClicks += currentCount;
 
             const wrapper = document.createElement('div');
@@ -247,29 +213,8 @@ async function loadTimerPresets() {
             countDisplay.classList.add('preset-click-count');
             countDisplay.textContent = `${currentCount}回`;
 
-            button.addEventListener('click', async function() {
-                selectedPresetDuration = parseInt(this.dataset.seconds);
-                currentPresetDocId = this.dataset.id;
-
-                remainingSeconds = selectedPresetDuration;
-                updateTimerDisplay(remainingSeconds);
-                calculateAndDisplayEndTime(remainingSeconds);
-                if (timerInterval) clearInterval(timerInterval);
-                startTimerButton.disabled = false;
-
-                try {
-                    const presetRef = db.collection('timerPresets').doc(currentPresetDocId);
-                    await presetRef.update({
-                        clickCount: firebase.firestore.FieldValue.increment(1)
-                    });
-
-                    presetClickCounts[currentPresetDocId]++;
-                    document.getElementById(`count-${currentPresetDocId}`).textContent = `${presetClickCounts[currentPresetDocId]}回`;
-                    updateTotalClicksDisplay();
-                    console.log(`Preset ${preset.name} count incremented`);
-                } catch (error) {
-                    console.error("Error updating preset click count: ", error);
-                }
+            button.addEventListener('click', function() {
+                handlePresetSelection(this);
             });
 
             wrapper.appendChild(button);
@@ -277,31 +222,30 @@ async function loadTimerPresets() {
             timerPresetsDiv.appendChild(wrapper);
         });
         updateTotalClicksDisplay();
+        setPresetButtonsState(true); // 初期ロード時は全ボタン有効
+        // startTimerButton.disabled = true; は DOMContentLoaded 内で設定
     } catch (error) {
         console.error("Error loading timer presets: ", error);
         timerPresetsDiv.textContent = "プリセットの読み込みに失敗しました。";
-        totalPresetClicksDisplay.textContent = "合計回数:エラー";
+        totalPresetClicksDisplay.textContent = "合計回数: エラー";
     }
 }
 
-// --- 合計クリック数表示を更新する関数 (変更なし) ---
+
 function updateTotalClicksDisplay() {
     let sum = 0;
     for (const id in presetClickCounts) {
         sum += presetClickCounts[id];
     }
-    totalPresetClicksDisplay.textContent = `合計回数:${sum}回`;
+    totalPresetClicksDisplay.textContent = `合計回数: ${sum}回`;
 }
-loadTimerPresets(); // ページ読み込み時にプリセットを読み込む
 
-// --- タイマー表示更新 ---
 function updateTimerDisplay(seconds) {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     timerDisplay.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
-// --- 終了時刻の計算と表示 ---
 function calculateAndDisplayEndTime(durationSeconds) {
     if (durationSeconds <= 0) {
         endTimeDisplay.textContent = "終了時刻: --:--";
@@ -315,18 +259,18 @@ function calculateAndDisplayEndTime(durationSeconds) {
 }
 
 // --- タイマースタート処理 (修正) ---
-// スタートボタンのdisabled状態はプリセット選択時に制御するので、
-// リセット時に selectedPresetDuration や remainingSeconds が 0 になることで、
-// スタートボタンが押せないようにする。
 startTimerButton.addEventListener('click', function() {
-    if (remainingSeconds <= 0 || selectedPresetDuration <= 0) { // selectedPresetDurationもチェック
+    if (!isPresetSelectedAndLocked || remainingSeconds <= 0) {
         alert("タイマー時間を選択してください。");
         return;
     }
     if (timerInterval) clearInterval(timerInterval);
 
-    calculateAndDisplayEndTime(remainingSeconds);
-    this.disabled = true;
+    console.log("Timer started. Count for preset", currentPresetDocId, "is now fixed for this session.");
+    this.disabled = true; // スタートボタンを無効化
+
+    // ★ スタートしたら、選択中のものも含め、全てのプリセットボタンを無効化
+    setPresetButtonsState(false, null, true); // 第3引数 true で強制的に全無効
 
     timerInterval = setInterval(() => {
         remainingSeconds--;
@@ -335,103 +279,132 @@ startTimerButton.addEventListener('click', function() {
             clearInterval(timerInterval);
             timerDisplay.textContent = "終了!";
             endTimeDisplay.textContent = "終了時刻: --:--";
-            // スタートボタンは再度有効にせず、プリセット選択を促す
-            // this.disabled = false; // コメントアウトまたは削除
-            // 必要なら再度プリセット選択を促すUI処理
+
+            // ★ タイマー終了後、全てのプリセットボタンを再度有効化
+            setPresetButtonsState(true);
+            isPresetSelectedAndLocked = false; // ロック状態を解除 (重要)
+            currentPresetDocId = null;      // 選択中IDもリセット
+            selectedPresetDuration = 0;     // 選択中時間もリセット
+            // スタートボタンは無効のまま (再度プリセット選択から)
+            console.log("Timer finished. All preset buttons re-enabled.");
         }
     }, 1000);
 });
-// 初期ロード時にスタートボタンを無効化しておく
-startTimerButton.disabled = true;
 
-
-// --- (裏設定) 時刻指定タイマー ---
-// コメントアウトを外して使用する場合は、HTML側のコメントアウトも外してください。
-
-startTargetTimeTimerButton.addEventListener('click', function() {
-    const targetTimeValue = targetTimeInput.value; // "HH:MM"
-    if (!targetTimeValue) {
-        alert("目標時刻を入力してください。");
-        return;
-    }
-
-    const [hours, minutes] = targetTimeValue.split(':');
-    const now = new Date();
-    const targetDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0);
-
-    if (targetDate <= now) {
-        alert("目標時刻は現在時刻より未来の時刻を指定してください。");
-        return;
-    }
-
-    remainingSeconds = Math.floor((targetDate - now) / 1000);
-    selectedPresetDuration = 0; // プリセット選択ではないのでリセット
+// --- タイマーリセット処理 (修正) ---
+resetTimerButton.addEventListener('click', async function() {
+    clearInterval(timerInterval);
+    timerInterval = null;
+    remainingSeconds = 0;
     updateTimerDisplay(remainingSeconds);
-    endTimeDisplay.textContent = `終了時刻: ${String(hours).padStart(2,'0')}:${String(minutes).padStart(2,'0')}`;
+    endTimeDisplay.textContent = "終了時刻: --:--";
 
-    if (timerInterval) clearInterval(timerInterval);
-    startTimerButton.disabled = true; // 通常のスタートボタンは一旦無効化
+    isPresetSelectedAndLocked = false;
+    currentPresetDocId = null;
+    selectedPresetDuration = 0;
+    setPresetButtonsState(true); // 全ボタン有効化
+    startTimerButton.disabled = true;
 
-    timerInterval = setInterval(() => {
-        remainingSeconds--;
-        updateTimerDisplay(remainingSeconds);
-        targetTimeRemainingDisplay.textContent = `目標時刻まであと ${formatTime(remainingSeconds)}`; // 裏設定用表示
-
-        if (remainingSeconds <= 0) {
-            clearInterval(timerInterval);
-            timerDisplay.textContent = "目標時刻です!";
-            targetTimeRemainingDisplay.textContent = "";
-            // alert("目標時刻です！");
-            startTimerButton.disabled = false;
+    // 全てのプリセットのクリック回数を0にリセット (既存のロジックは維持)
+    try {
+        const presetsQuerySnapshot = await db.collection('timerPresets').get();
+        const batch = db.batch();
+        presetsQuerySnapshot.forEach(doc => {
+            const presetRef = db.collection('timerPresets').doc(doc.id);
+            batch.update(presetRef, { clickCount: 0 });
+            presetClickCounts[doc.id] = 0;
+            const countDisplayElement = document.getElementById(`count-${doc.id}`);
+            if (countDisplayElement) {
+                countDisplayElement.textContent = `0回`;
+            }
+        });
+        await batch.commit();
+        console.log("All preset counts have been reset to 0 by reset button.");
+        updateTotalClicksDisplay();
+    } catch (error) {
+        console.error("Error resetting all preset counts by reset button: ", error);
+        // (フォールバック処理は変更なし)
+        for (const presetId in presetClickCounts) {
+            presetClickCounts[presetId] = 0;
+            const countDisplayElement = document.getElementById(`count-${presetId}`);
+            if (countDisplayElement) {
+                countDisplayElement.textContent = `0回`;
+            }
         }
-    }, 1000);
+        updateTotalClicksDisplay();
+        alert("一部またはすべてのプリセット回数のリセットに失敗しました。画面表示はリセットされます。");
+    }
 });
 
-function formatTime(totalSeconds) { // 裏設定用ヘルパー
+// --- (裏設定) 時刻指定タイマー (関連するDOM要素がない場合はコメントアウト) ---
+
+if (startTargetTimeTimerButton) { // 要素が存在する場合のみリスナーを設定
+    startTargetTimeTimerButton.addEventListener('click', function() {
+        const targetTimeValue = targetTimeInput.value;
+        if (!targetTimeValue) {
+            alert("目標時刻を入力してください。");
+            return;
+        }
+        const [hours, minutes] = targetTimeValue.split(':');
+        const now = new Date();
+        const targetDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0);
+
+        if (targetDate <= now) {
+            alert("目標時刻は現在時刻より未来の時刻を指定してください。");
+            return;
+        }
+        remainingSeconds = Math.floor((targetDate - now) / 1000);
+        selectedPresetDuration = 0;
+        updateTimerDisplay(remainingSeconds);
+        endTimeDisplay.textContent = `終了時刻: ${String(hours).padStart(2,'0')}:${String(minutes).padStart(2,'0')}`;
+        if (timerInterval) clearInterval(timerInterval);
+        startTimerButton.disabled = true;
+
+        timerInterval = setInterval(() => {
+            remainingSeconds--;
+            updateTimerDisplay(remainingSeconds);
+            if (targetTimeRemainingDisplay) {
+                targetTimeRemainingDisplay.textContent = `目標時刻まであと ${formatTime(remainingSeconds)}`;
+            }
+            if (remainingSeconds <= 0) {
+                clearInterval(timerInterval);
+                timerDisplay.textContent = "目標時刻です!";
+                if (targetTimeRemainingDisplay) {
+                    targetTimeRemainingDisplay.textContent = "";
+                }
+                startTimerButton.disabled = false;
+            }
+        }, 1000);
+    });
+}
+
+function formatTime(totalSeconds) {
     const h = Math.floor(totalSeconds / 3600);
     const m = Math.floor((totalSeconds % 3600) / 60);
     const s = totalSeconds % 60;
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
 
-
-// --- 票決モード関連のDOM要素 ---
-const majorityTypeSelect = document.getElementById('majorityType');
-const aye1Input = document.getElementById('aye1');
-const aye2Input = document.getElementById('aye2');
-const aye3Input = document.getElementById('aye3');
-const nay1Input = document.getElementById('nay1');
-const nay2Input = document.getElementById('nay2');
-const nay3Input = document.getElementById('nay3');
-const proxyVoteInput = document.getElementById('proxyVote');
-const proxyVoteField = document.getElementById('proxyVoteField'); // 議長委任票のfieldset
-const calculateVoteButton = document.getElementById('calculateVoteButton');
-const voteCalculationFormulaDiv = document.getElementById('voteCalculationFormula');
-const voteResultDiv = document.getElementById('voteResult');
-const saveVoteResultButton = document.getElementById('saveVoteResultButton');
-
-let lastVoteResultData = null; // 最後に計算した票決結果を保存
-
-// --- 多数決タイプ変更時の処理 ---
-majorityTypeSelect.addEventListener('change', updateProxyVoteFieldVisibility);
-
+// --- 票決モード機能 ---
 function updateProxyVoteFieldVisibility() {
     if (majorityTypeSelect.value === 'simple') {
-        proxyVoteField.style.display = 'none'; // 単純多数決なら議長委任票を非表示
+        proxyVoteField.style.display = 'none';
     } else {
-        proxyVoteField.style.display = 'block'; // 完全多数決なら表示
+        proxyVoteField.style.display = 'block';
     }
-    // タイプ変更時に計算結果をクリア
     voteCalculationFormulaDiv.textContent = "計算式: ";
     voteResultDiv.textContent = "結果: ";
     saveVoteResultButton.style.display = 'none';
     lastVoteResultData = null;
 }
-// 初期表示のために呼び出し
-updateProxyVoteFieldVisibility();
+majorityTypeSelect.addEventListener('change', updateProxyVoteFieldVisibility);
+// 初期表示のために呼び出し (DOMContentLoaded内で呼ばれるように移動しても良い)
+// ただし、DOMContentLoaded より前に majorityTypeSelect が存在しない可能性があるので注意
+if (majorityTypeSelect) { // 要素が存在するか確認してから呼び出し
+    updateProxyVoteFieldVisibility();
+}
 
 
-// --- 票決計算処理 (単純多数決部分を修正) ---
 calculateVoteButton.addEventListener('click', function() {
     const aye1 = parseInt(aye1Input.value) || 0;
     const aye2 = parseInt(aye2Input.value) || 0;
@@ -439,48 +412,39 @@ calculateVoteButton.addEventListener('click', function() {
     const nay1 = parseInt(nay1Input.value) || 0;
     const nay2 = parseInt(nay2Input.value) || 0;
     const nay3 = parseInt(nay3Input.value) || 0;
-    let proxyVote = parseInt(proxyVoteInput.value) || 0; // 完全多数決の時のみ使用
+    let proxyVoteValue = parseInt(proxyVoteInput.value) || 0;
 
-    let totalAyePersons = 0; // 賛成の総人数
-    let totalNayPersons = 0; // 反対の総人数
-
-    let finalAye = 0; // 最終的な賛成票（または人数）
-    let finalNay = 0; // 最終的な反対票（または人数）
+    let totalAyePersons = 0;
+    let totalNayPersons = 0;
+    let finalAye = 0;
+    let finalNay = 0;
     let resultText = "";
     let formulaText = "";
-
     const majorityType = majorityTypeSelect.value;
 
-    if (majorityType === 'absolute') { // 完全多数決 (変更なし)
+    if (majorityType === 'absolute') {
         const totalAyeWeightedVotes = (aye1 * 1) + (aye2 * 2) + (aye3 * 3);
         const totalNayWeightedVotes = (nay1 * 1) + (nay2 * 2) + (nay3 * 3);
-
         finalAye = totalAyeWeightedVotes;
         finalNay = totalNayWeightedVotes;
 
         if (totalAyeWeightedVotes > totalNayWeightedVotes) {
-            finalAye += proxyVote;
+            finalAye += proxyVoteValue;
         } else if (totalNayWeightedVotes > totalAyeWeightedVotes) {
-            finalNay += proxyVote;
-        } else {
-            // 同数の場合の議長委任票の扱いは仕様による
-            // ここでは例として加算しない
+            finalNay += proxyVoteValue;
         }
         formulaText = `賛成(票数): (1票×${aye1} + 2票×${aye2} + 3票×${aye3}) = ${totalAyeWeightedVotes}\n` +
                       `反対(票数): (1票×${nay1} + 2票×${nay2} + 3票×${nay3}) = ${totalNayWeightedVotes}\n`;
-        if (proxyVote > 0) {
-            formulaText += `議長委任票(${proxyVote})を ${totalAyeWeightedVotes > totalNayWeightedVotes ? '賛成' : (totalNayWeightedVotes > totalAyeWeightedVotes ? '反対' : '影響なし')} に加算\n`;
+        if (proxyVoteValue > 0) {
+            formulaText += `議長委任票(${proxyVoteValue})を ${totalAyeWeightedVotes > totalNayWeightedVotes ? '賛成' : (totalNayWeightedVotes > totalAyeWeightedVotes ? '反対' : '影響なし')} に加算\n`;
         }
         formulaText += `最終賛成(票数): ${finalAye}, 最終反対(票数): ${finalNay}`;
-
-    } else { // 単純多数決 (ロジック変更)
-        totalAyePersons = aye1 + aye2 + aye3; // 賛成の人数合計
-        totalNayPersons = nay1 + nay2 + nay3; // 反対の人数合計
-
+    } else { // simple
+        totalAyePersons = aye1 + aye2 + aye3;
+        totalNayPersons = nay1 + nay2 + nay3;
         finalAye = totalAyePersons;
         finalNay = totalNayPersons;
-        // 単純多数決では議長委任票は計算に含めない
-        proxyVote = 0;
+        proxyVoteValue = 0; // 単純多数決では計算に含めないことを明示
 
         formulaText = `賛成(人数): ${aye1}(1票) + ${aye2}(2票) + ${aye3}(3票) = ${totalAyePersons} 人\n` +
                       `反対(人数): ${nay1}(1票) + ${nay2}(2票) + ${nay3}(3票) = ${totalNayPersons} 人\n` +
@@ -492,22 +456,21 @@ calculateVoteButton.addEventListener('click', function() {
     } else if (finalNay > finalAye) {
         resultText = "否決 (反対多数)";
     } else {
-        resultText = "同数";
+        resultText = "同数 (否決)";
     }
 
     voteCalculationFormulaDiv.innerText = `計算式:\n${formulaText}`;
     voteResultDiv.textContent = `結果: ${resultText}`;
     saveVoteResultButton.style.display = 'inline-block';
 
-    // 保存用データを作成 (単純多数決時の保存データも更新)
     lastVoteResultData = {
         timestamp: firebase.firestore.FieldValue.serverTimestamp(),
         majorityType: majorityType,
         ayeCounts: { count1: aye1, count2: aye2, count3: aye3 },
         nayCounts: { count1: nay1, count2: nay2, count3: nay3 },
-        proxyVoteCount: (majorityType === 'absolute' ? (parseInt(proxyVoteInput.value) || 0) : 0), // 単純多数決では0
-        totalAyeEffective: (majorityType === 'absolute' ? (aye1 * 1) + (aye2 * 2) + (aye3 * 3) : totalAyePersons), // 有効票/人数
-        totalNayEffective: (majorityType === 'absolute' ? (nay1 * 1) + (nay2 * 2) + (nay3 * 3) : totalNayPersons), // 有効票/人数
+        proxyVoteCount: (majorityType === 'absolute' ? (parseInt(proxyVoteInput.value) || 0) : 0),
+        totalAyeEffective: (majorityType === 'absolute' ? (aye1 * 1) + (aye2 * 2) + (aye3 * 3) : totalAyePersons),
+        totalNayEffective: (majorityType === 'absolute' ? (nay1 * 1) + (nay2 * 2) + (nay3 * 3) : totalNayPersons),
         finalAye: finalAye,
         finalNay: finalNay,
         result: resultText,
@@ -515,7 +478,6 @@ calculateVoteButton.addEventListener('click', function() {
     };
 });
 
-// --- 票決結果のFirestoreへの保存 ---
 saveVoteResultButton.addEventListener('click', async function() {
     if (!lastVoteResultData) {
         alert("保存する計算結果がありません。");
@@ -525,8 +487,8 @@ saveVoteResultButton.addEventListener('click', async function() {
         const docRef = await db.collection('votingResults').add(lastVoteResultData);
         console.log("Document written with ID: ", docRef.id);
         alert("票決結果を保存しました！");
-        saveVoteResultButton.style.display = 'none'; // 保存後は非表示
-        lastVoteResultData = null; // 保存したのでクリア
+        saveVoteResultButton.style.display = 'none';
+        lastVoteResultData = null;
     } catch (error) {
         console.error("Error adding document: ", error);
         alert("結果の保存に失敗しました。");
